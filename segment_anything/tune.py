@@ -42,7 +42,7 @@ sys.path.append("./segment-anything")
 from segment_anything import sam_model_registry
 from skimage import measure
 
-NUM_WORKERS = 0  # https://github.com/pytorch/pytorch/issues/42518
+NUM_WORKERS = 16  # https://github.com/pytorch/pytorch/issues/42518
 NUM_GPUS = torch.cuda.device_count()
 DEVICE = 'cuda'
 
@@ -190,6 +190,7 @@ class SAMFinetuner(pl.LightningModule):
 
     def forward(self, imgs, bboxes, labels):
         _, c, h, w = imgs.shape
+        imgs = self.resize_transform.apply_image_torch(imgs)
         # fix: change from [:, :3, h, w] to [:, :3, :, :]
         imgs, dems = imgs[:, :3, :, :], imgs[:, -1, :, :].unsqueeze(1)
 
