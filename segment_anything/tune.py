@@ -179,6 +179,8 @@ class SAMFinetuner(pl.LightningModule):
         if freeze_mask_decoder:
             for param in self.model.mask_decoder.parameters():
                 param.requires_grad = False
+        if freeze_image_encoder and freeze_prompt_encoder and freeze_mask_decoder:
+            self.model.eval()
 
         self.batch_size = batch_size
         self.learning_rate = learning_rate
@@ -193,6 +195,7 @@ class SAMFinetuner(pl.LightningModule):
         imgs = self.resize_transform.apply_image_torch(imgs)
         # fix: change from [:, :3, h, w] to [:, :3, :, :]
         imgs, dems = imgs[:, :3, :, :], imgs[:, -1, :, :].unsqueeze(1)
+        print(imgs.shape)
 
         # r, g, b, nir = imgs[:, :4, h, w].transpose(1, 0, 2, 3)
         # ndvi_mask = (nir - r) / (nir + r) > 0.3
@@ -202,7 +205,11 @@ class SAMFinetuner(pl.LightningModule):
         # ndwi_mask_dilation = binary_dilation(ndwi_mask)
         # ndwi_mask_dilation[ndwi_mask] = False
 
-        features = self.model.image_encoder(imgs)
+        try:
+            features = self.model.image_encoder(imgs)
+        except torch.cuda.OutOfMemoryError:
+            print(torch.cuda.memory_summary())
+            exit(-1)
         dense_prompts = self.prompt_adapter(dems)
         # num_masks = sum([len(b) for b in bboxes])
 
@@ -316,7 +323,7 @@ class SAMFinetuner(pl.LightningModule):
         return metrics
 
     def configure_optimizers(self):
-        opt = torch.optim.AdamW(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+        opt = torch.optim.AdamW([x for x in self.parameters() if x.requires_grad], lr=self.learning_rate, weight_decay=self.weight_decay)
 
         def warmup_step_lr_builder(warmup_steps, milestones, gamma):
             def warmup_step_lr(steps):
@@ -417,7 +424,6 @@ def main():
         freeze_image_encoder=args.freeze_image_encoder,
         freeze_prompt_encoder=args.freeze_prompt_encoder,
         freeze_mask_decoder=args.freeze_mask_decoder,
-
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
@@ -441,16 +447,17 @@ def main():
         strategy='ddp' if NUM_GPUS > 1 else "auto",
         accelerator=DEVICE,
         devices=NUM_GPUS,
-        precision=32,
+        precision="bf16-mixed",
         callbacks=callbacks,
         max_epochs=-1,
         max_steps=args.steps,
         val_check_interval=args.metrics_interval,
         check_val_every_n_epoch=None,
         num_sanity_val_steps=0,
+        profiler="simple"
     )
 
-    datamodule = RiverbankDataModule()
+    datamodule = RiverbankDataModule(batch_size=args.batch_size)
 
     trainer.fit(model, datamodule=datamodule)
 
