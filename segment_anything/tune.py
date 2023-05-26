@@ -169,7 +169,7 @@ class SAMFinetuner(pl.LightningModule):
         )
         self.image_size = image_size
         self.freeze_image_encoder = freeze_image_encoder
-        self.resize_transform = ResizeLongestSide(self.model.img_size)
+        self.resize_transform = ResizeLongestSide(self.model.image_encoder.img_size)
         if freeze_image_encoder:
             for param in self.model.image_encoder.parameters():
                 param.requires_grad = False
