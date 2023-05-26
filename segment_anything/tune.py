@@ -195,7 +195,6 @@ class SAMFinetuner(pl.LightningModule):
         imgs = self.resize_transform.apply_image_torch(imgs)
         # fix: change from [:, :3, h, w] to [:, :3, :, :]
         imgs, dems = imgs[:, :3, :, :], imgs[:, -1, :, :].unsqueeze(1)
-        print(imgs.shape)
 
         # r, g, b, nir = imgs[:, :4, h, w].transpose(1, 0, 2, 3)
         # ndvi_mask = (nir - r) / (nir + r) > 0.3
@@ -205,18 +204,14 @@ class SAMFinetuner(pl.LightningModule):
         # ndwi_mask_dilation = binary_dilation(ndwi_mask)
         # ndwi_mask_dilation[ndwi_mask] = False
 
-        try:
-            features = self.model.image_encoder(imgs)
-        except torch.cuda.OutOfMemoryError:
-            print(torch.cuda.memory_summary())
-            exit(-1)
+        features = self.model.image_encoder(imgs)
         dense_prompts = self.prompt_adapter(dems)
         # num_masks = sum([len(b) for b in bboxes])
 
         loss_focal = loss_dice = loss_iou = 0.
         predictions = []
         tp, fp, fn, tn = [], [], [], []
-        for feature, bbox, dense_prompt, label in zip(features, bboxes, dense_prompts, labels):
+        for feature, dense_prompt, label in zip(features, dense_prompts, labels):
             # pos_pts = np.concatenate([
             #     random_poi_from_mask(ndwi_mask, num_points=5),
             #     random_poi_from_mask(ndwi_mask_dilation, num_points=10)
@@ -246,19 +241,21 @@ class SAMFinetuner(pl.LightningModule):
                 align_corners=False,
             )
             predictions.append(masks)
+            # masks = masks.unsqueeze(0)
+            label = label.unsqueeze(0).unsqueeze(0)
             # Compute the iou between the predicted masks and the ground truth masks
             batch_tp, batch_fp, batch_fn, batch_tn = smp.metrics.get_stats(
-                masks,
-                label.unsqueeze(1),
+                output=masks,
+                target=label,
                 mode='binary',
                 threshold=0.5,
             )
             batch_iou = smp.metrics.iou_score(batch_tp, batch_fp, batch_fn, batch_tn)
             # Compute the loss
-            masks = masks.squeeze(1).flatten(1)
+            masks = masks.flatten(1)
             label = label.flatten(1)
-            loss_focal += sigmoid_focal_loss(masks, label.float())  # / num_masks
-            loss_dice += dice(preds=masks, target=label.float())  # / num_masks
+            loss_focal += sigmoid_focal_loss(inputs=masks, targets=label.float(), reduction="sum")  # / num_masks
+            loss_dice += dice(preds=masks, target=label)  # / num_masks
             loss_iou += F.mse_loss(iou_predictions, batch_iou, reduction='sum')  # / num_masks
             tp.append(batch_tp)
             fp.append(batch_fp)
@@ -278,7 +275,7 @@ class SAMFinetuner(pl.LightningModule):
 
     def training_step(self, batch, batch_nb):
         # fix: images -> image
-        imgs, bboxes, labels = batch["image"], batch["bbox"], batch[""]
+        imgs, bboxes, labels = batch["image"], batch["bbox"], batch["mask"]
         outputs = self.forward(imgs, bboxes, labels)
 
         for metric in ['tp', 'fp', 'fn', 'tn']:
@@ -447,7 +444,7 @@ def main():
         strategy='ddp' if NUM_GPUS > 1 else "auto",
         accelerator=DEVICE,
         devices=NUM_GPUS,
-        precision="bf16-mixed",
+        precision=16,
         callbacks=callbacks,
         max_epochs=-1,
         max_steps=args.steps,
