@@ -295,7 +295,7 @@ class SAMFinetuner(pl.LightningModule):
         return metrics
 
     def validation_step(self, batch, batch_nb):
-        imgs, bboxes, labels = batch
+        imgs, bboxes, labels = batch["image"], batch["bbox"], batch["mask"]
         outputs = self(imgs, bboxes, labels)
         outputs.pop("predictions")
         return outputs
@@ -379,7 +379,7 @@ class RiverbankDataModule(pl.LightningDataModule):
         return train_loader
 
     def val_dataloader(self):
-        sampler = GridGeoSampler(self.train_dataset, size=self.img_size, stride=(self.img_size // 2))
+        sampler = GridGeoSampler(self.val_dataset, size=self.img_size, stride=(self.img_size // 2))
         val_loader = torch.utils.data.DataLoader(
             self.val_dataset,
             collate_fn=stack_samples,
@@ -431,12 +431,11 @@ def main():
         LearningRateMonitor(logging_interval='step'),
         ModelCheckpoint(
             dirpath=args.output_dir,
-            filename='{step}-{val_per_mask_iou:.2f}',
+            filename='{step}-{train_per_mask_iou:.2f}',
             save_last=True,
             save_top_k=1,
-            monitor="val_per_mask_iou",
+            monitor="train_per_mask_iou",
             mode="max",
-            save_weights_only=True,
             every_n_train_steps=args.metrics_interval,
         ),
     ]
@@ -446,16 +445,16 @@ def main():
         devices=NUM_GPUS,
         precision=16,
         callbacks=callbacks,
-        max_epochs=-1,
+        max_epochs=2,
         max_steps=args.steps,
-        val_check_interval=args.metrics_interval,
-        check_val_every_n_epoch=None,
+        val_check_interval=0.5,
+        # check_val_every_n_epoch=None,
         num_sanity_val_steps=0,
-        profiler="simple"
+        profiler="simple",
+        accumulate_grad_batches=8
     )
 
-    datamodule = RiverbankDataModule(batch_size=args.batch_size)
-
+    datamodule = RiverbankDataModule(batch_size=args.batch_size, img_size=args.image_size)
     trainer.fit(model, datamodule=datamodule)
 
 
