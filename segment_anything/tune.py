@@ -193,14 +193,14 @@ class SAMFinetuner(pl.LightningModule):
     def forward(self, imgs, bboxes, labels):
         _, c, h, w = imgs.shape
         imgs = self.resize_transform.apply_image_torch(imgs)
-        # fix: change from [:, :3, h, w] to [:, :3, :, :]
+        # (B, C, H, W)
         imgs, dems = imgs[:, :3, :, :], imgs[:, -1, :, :].unsqueeze(1)
 
-        # r, g, b, nir = imgs[:, :4, h, w].transpose(1, 0, 2, 3)
+        # r, g, b, nir = imgs[:, :4, :, :].cpu().numpy().transpose(1, 0, 2, 3)
         # ndvi_mask = (nir - r) / (nir + r) > 0.3
         # ndwi_mask = (g - nir) / (g + nir) > 0
-        # ndvi_mask[ndwi_mask] = False
-        #
+        # ndvi_mask[:, ndwi_mask] = False
+
         # ndwi_mask_dilation = binary_dilation(ndwi_mask)
         # ndwi_mask_dilation[ndwi_mask] = False
 
@@ -212,13 +212,13 @@ class SAMFinetuner(pl.LightningModule):
         predictions = []
         tp, fp, fn, tn = [], [], [], []
         for feature, dense_prompt, label in zip(features, dense_prompts, labels):
-            # pos_pts = np.concatenate([
-            #     random_poi_from_mask(ndwi_mask, num_points=5),
-            #     random_poi_from_mask(ndwi_mask_dilation, num_points=10)
-            # ])
-            # neg_pts = random_poi_from_mask(ndvi_mask, num_points=10)
-            # poi_labels = np.concatenate([np.ones(len(pos_pts)), np.zeros(len(neg_pts))])
-            # pois = np.concatenate([pos_pts, neg_pts])
+            # FIXME: Use PyTorch operations
+            # pos_pts = random_poi_from_mask(ndwi_mask, num_points=5)
+            # neg_pts = random_poi_from_mask(ndvi_mask, num_points=5)
+            # poi_labels = torch.from_numpy(
+            #     np.concatenate([np.ones(len(pos_pts)), np.zeros(len(neg_pts))])
+            # ).to(imgs.device)
+            # pois = torch.from_numpy(np.concatenate([pos_pts, neg_pts])).to(imgs.device)
             # Embed prompts
             sparse_embeddings, dense_embeddings = self.model.prompt_encoder(
                 points=None,  # (pois, poi_labels),
@@ -451,7 +451,7 @@ def main():
         # check_val_every_n_epoch=None,
         num_sanity_val_steps=0,
         profiler="simple",
-        accumulate_grad_batches=8
+        accumulate_grad_batches=16
     )
 
     datamodule = RiverbankDataModule(batch_size=args.batch_size, img_size=args.image_size)
